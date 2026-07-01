@@ -344,6 +344,78 @@ async function preprocessImageForOcr(file: File): Promise<string> {
   return canvas.toDataURL("image/png");
 }
 
+async function parseImageFile(file: File, selectedYear: number, selectedMonth: number): Promise<ImportedRow[]> {
+  const { createWorker } = (await import("tesseract.js")) as any;
+  const worker = createWorker({ logger: () => null });
+
+  try {
+    await worker.load();
+
+    let language = "por";
+    try {
+      await worker.loadLanguage(language);
+      await worker.initialize(language);
+    } catch (err) {
+      console.warn("Portuguese language failed, falling back to English", err);
+      language = "eng";
+      await worker.loadLanguage(language);
+      await worker.initialize(language);
+    }
+
+    const dataUrl = await preprocessImageForOcr(file);
+
+    async function recognizeWithPsm(psm: number) {
+      await worker.setParameters({
+        tessedit_pageseg_mode: psm,
+        tessedit_char_whitelist: "0123456789:./-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+        user_defined_dpi: "300",
+      });
+      const { data } = await worker.recognize(dataUrl);
+      return parseImageRowsFromText(data.text || "", selectedYear, selectedMonth);
+    }
+
+    let rows = await recognizeWithPsm(6);
+    if (rows.length === 0) {
+      rows = await recognizeWithPsm(3);
+    }
+    if (rows.length === 0) {
+      rows = await recognizeWithPsm(4);
+    }
+
+    return rows;
+  } catch (err) {
+    console.error("Erro ao processar imagem OCR:", err);
+    throw err;
+  } finally {
+    await worker.terminate().catch(() => null);
+  }
+}
+
+function DashboardPage() {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth());
+  const [dailyGoalMinutes, setDailyGoalMinutes] = useState(480);
+  const [worksSaturday, setWorksSaturday] = useState(true);
+  const [worksSunday, setWorksSunday] = useState(true);
+  const [salary, setSalary] = useState(0);
+  const [monthData, setMonthData] = useState<MonthData>({});
+  const [hydrated, setHydrated] = useState(false);
+
+  // Hydrate from localStorage
+  useEffect(() => {
+    const s = loadStorage();
+    setDailyGoalMinutes(s.dailyGoalMinutes);
+    setWorksSaturday(s.worksSaturday);
+    setWorksSunday(s.worksSunday);
+    setSalary(s.salary);
+    setMonthData(s.months[monthKey(year, month)] ?? {});
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reload month when changing year/month
+  useEffect(() => {
     if (!hydrated) return;
     const s = loadStorage();
     setMonthData(s.months[monthKey(year, month)] ?? {});
