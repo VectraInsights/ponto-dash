@@ -405,7 +405,6 @@ function DashboardPage() {
       ];
 
       for (let d = 1; d <= daysInThisMonth; d++) {
-      for (let d = 1; d <= daysInThisMonth; d++) {
         const date = new Date(exportYear, monthIndex, d);
         const dateKeyValue = dayKey(exportYear, monthIndex, d);
         const entry = storage.months[monthKeyToExport]?.[dateKeyValue] ?? EMPTY_ENTRY;
