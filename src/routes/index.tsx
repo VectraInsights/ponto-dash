@@ -89,13 +89,30 @@ function normalizeDateKey(dateText: string): string | null {
   return null;
 }
 
+const MONTH_NAME_MAP: Record<string, number> = {
+  janeiro: 0,
+  fevereiro: 1,
+  março: 2,
+  abril: 3,
+  maio: 4,
+  junho: 5,
+  julho: 6,
+  agosto: 7,
+  setembro: 8,
+  outubro: 9,
+  novembro: 10,
+  dezembro: 11,
+};
+
 function normalizeOcrText(text: string): string {
   return text
     .replace(/[\u00A0\u2000-\u200B]/g, " ")
     .replace(/[\[\]{}|]/g, " ")
     .replace(/([0-9])[lI](?=[0-9])/g, "$11")
     .replace(/([0-9])[oO](?=[0-9])/g, "$10")
+    .replace(/[–—]/g, "-")
     .replace(/[,;·]/g, ":")
+    .replace(/\b(h)(?=\d{2})/gi, ":")
     .replace(/[^0-9A-Za-z:./\-\s\n]/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\s*\n\s*/g, "\n")
@@ -103,18 +120,52 @@ function normalizeOcrText(text: string): string {
 }
 
 function parseTimesFromText(text: string): string[] {
-  const matches = [...text.matchAll(/\b([01]?\d|2[0-3])(?:[:h.·\-\s]+)([0-5]\d)\b/g)];
-  if (matches.length > 0) {
-    return matches.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+  const matches = [...text.matchAll(/\b([01]?\d|2[0-3])(?:[:.\-\s]+)([0-5]\d)\b/g)];
+  const uniqueTimes: string[] = [];
+
+  for (const m of matches) {
+    const time = `${m[1].padStart(2, "0")}:${m[2]}`;
+    if (!uniqueTimes.includes(time)) uniqueTimes.push(time);
   }
 
-  const spaced = [...text.matchAll(/(?<!\d)([01]?\d|2[0-3])\s+([0-5]\d)(?!\d)/g)];
-  if (spaced.length > 0) {
-    return spaced.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+  if (uniqueTimes.length > 0) return uniqueTimes;
+
+  const fallbackMatches = [...text.matchAll(/(?<!\d)([01]?\d|2[0-3])\s+([0-5]\d)(?!\d)/g)];
+  for (const m of fallbackMatches) {
+    const time = `${m[1].padStart(2, "0")}:${m[2]}`;
+    if (!uniqueTimes.includes(time)) uniqueTimes.push(time);
   }
 
-  const fallback = [...text.matchAll(/(?<!\d)([01]?\d|2[0-3])([0-5]\d)(?!\d)/g)];
-  return fallback.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+  if (uniqueTimes.length > 0) return uniqueTimes;
+
+  const compactMatches = [...text.matchAll(/(?<!\d)([01]?\d|2[0-3])([0-5]\d)(?!\d)/g)];
+  for (const m of compactMatches) {
+    const time = `${m[1].padStart(2, "0")}:${m[2]}`;
+    if (!uniqueTimes.includes(time)) uniqueTimes.push(time);
+  }
+
+  return uniqueTimes;
+}
+
+function inferYearFromText(text: string, fallbackYear: number): number {
+  const explicit = text.match(/\b(20\d{2}|19\d{2})\b/);
+  if (explicit) return Number(explicit[1]);
+
+  const shortYear = text.match(/\b(\d{2})\b/);
+  if (shortYear) {
+    const year = Number(shortYear[1]);
+    if (year >= 50) return 1900 + year;
+    if (year <= 49) return 2000 + year;
+  }
+
+  return fallbackYear;
+}
+
+function inferMonthFromText(text: string, fallbackMonth: number): number {
+  for (const [monthName, index] of Object.entries(MONTH_NAME_MAP)) {
+    if (new RegExp(`\\b${monthName}\\b`, "i").test(text)) return index;
+  }
+  return fallbackMonth;
 }
 
 function parseDateFromText(text: string, fallbackYear?: number): string | null {
@@ -124,6 +175,20 @@ function parseDateFromText(text: string, fallbackYear?: number): string | null {
   if (match) {
     const normalized = normalizeDateKey(match[1] || match[2] || match[3]);
     if (normalized) return normalized;
+  }
+
+  const monthNamePattern = new RegExp(
+    `\\b(\\d{1,2})\\s*(?:de\\s*)?(${Object.keys(MONTH_NAME_MAP).join("|")})(?:\\s*(?:de\\s*(\\d{2,4})))?\\b`,
+    "i"
+  );
+  const monthNameMatch = text.match(monthNamePattern);
+  if (monthNameMatch) {
+    const day = monthNameMatch[1].padStart(2, "0");
+    const month = (MONTH_NAME_MAP[monthNameMatch[2].toLowerCase()] + 1).toString().padStart(2, "0");
+    const year = monthNameMatch[3]
+      ? normalizeYearString(monthNameMatch[3])
+      : fallbackYear?.toString() ?? "";
+    if (year) return normalizeDateKey(`${day}/${month}/${year}`);
   }
 
   if (fallbackYear) {
@@ -136,6 +201,109 @@ function parseDateFromText(text: string, fallbackYear?: number): string | null {
   }
 
   return null;
+}
+
+function normalizeYearString(value: string): string {
+  const year = Number(value);
+  if (value.length === 2) {
+    return year >= 50 ? `19${value}` : `20${value.padStart(2, "0")}`;
+  }
+  return value;
+}
+
+function mergeContinuationLines(lines: string[]): string[] {
+  const merged: string[] = [];
+  for (const line of lines) {
+    const hasDate = /\b\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\b/.test(line);
+    const startsWithDay = /^\s*([12]?\d|3[01])\b/.test(line);
+    const hasTimes = parseTimesFromText(line).length > 0;
+
+    if (!hasDate && !startsWithDay && hasTimes && merged.length > 0) {
+      merged[merged.length - 1] += ` ${line}`;
+    } else {
+      merged.push(line);
+    }
+  }
+  return merged;
+}
+
+function parseImageRowsFromText(text: string, selectedYear: number, selectedMonth: number): ImportedRow[] {
+  const normalized = normalizeOcrText(text);
+  const inferredYear = inferYearFromText(normalized, selectedYear);
+  const inferredMonth = inferMonthFromText(normalized, selectedMonth);
+  let lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  lines = mergeContinuationLines(lines);
+
+  const out: ImportedRow[] = [];
+  let currentDateKey: string | null = null;
+
+  for (let line of lines) {
+    line = line.replace(/\s{2,}/g, " ");
+    if (/^(?:dia|ent|sai|total|observa|quinzena|empregador|cargo|assinatura|1o|1ª|2o|2ª|horas|saldo)/i.test(line)) {
+      continue;
+    }
+
+    const explicitDate = parseDateFromText(line, inferredYear);
+    let dateKey: string | null = explicitDate;
+    let day: number | null = null;
+
+    if (explicitDate) {
+      day = Number(explicitDate.split("-")[2]);
+    } else {
+      const dayMatch = line.match(/^\s*([12]?\d|3[01])\b/);
+      if (dayMatch) {
+        day = Number(dayMatch[1]);
+      }
+      if (!day && currentDateKey) {
+        dateKey = currentDateKey;
+      } else if (day) {
+        dateKey = `${inferredYear}-${(inferredMonth + 1).toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+      }
+    }
+
+    if (!dateKey) continue;
+    currentDateKey = dateKey;
+
+    const times = parseTimesFromText(line);
+    const isHoliday = /\b(feriado|domingo|folga|descanso)\b/i.test(line);
+
+    if (times.length === 0 && !isHoliday) continue;
+
+    const entry: DayEntry = {
+      ...EMPTY_ENTRY,
+      isHoliday,
+      entrada1: "",
+      saida1: "",
+      entrada2: "",
+      saida2: "",
+    };
+
+    if (times.length === 2) {
+      entry.entrada1 = times[0];
+      entry.saida2 = times[1];
+    } else if (times.length === 3) {
+      entry.entrada1 = times[0];
+      entry.saida1 = times[1];
+      entry.saida2 = times[2];
+    } else if (times.length >= 4) {
+      entry.entrada1 = times[0];
+      entry.saida1 = times[1];
+      entry.entrada2 = times[2];
+      entry.saida2 = times[3];
+    }
+
+    out.push({
+      dateKey,
+      monthKey: dateKey.slice(0, 7),
+      entry,
+    });
+  }
+
+  return out;
 }
 
 async function preprocessImageForOcr(file: File): Promise<string> {
@@ -176,150 +344,6 @@ async function preprocessImageForOcr(file: File): Promise<string> {
   return canvas.toDataURL("image/png");
 }
 
-function parseImageRowsFromText(text: string, selectedYear: number, selectedMonth: number): ImportedRow[] {
-  const normalized = normalizeOcrText(text);
-  const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const out: ImportedRow[] = [];
-
-  for (let line of lines) {
-    line = line.replace(/\s{2,}/g, " ");
-    if (/^(?:dia|ent|sai|total|observa|quinzena|empregador|cargo|assinatura|1o|1ª|2o|2ª)/i.test(line)) {
-      continue;
-    }
-
-    const explicitDate = parseDateFromText(line, selectedYear);
-    let dateKey: string | null = explicitDate;
-    let day: number | null = null;
-
-    if (explicitDate) {
-      day = Number(explicitDate.split("-")[2]);
-    } else {
-      const dayMatch = line.match(/^[^\d]*([1-9]|[12]\d|3[01])\b/);
-      if (dayMatch) {
-        day = Number(dayMatch[1]);
-      } else {
-        const fallbackMatch = line.match(/\b([1-9]|[12]\d|3[01])\b(?![:h.])/);
-        if (fallbackMatch) {
-          day = Number(fallbackMatch[1]);
-        }
-      }
-      if (!day) continue;
-      dateKey = `${selectedYear}-${(selectedMonth + 1).toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
-    }
-
-    if (!dateKey) continue;
-    const monthKey = dateKey.slice(0, 7);
-
-    const times = parseTimesFromText(line);
-    const isHoliday = /\b(feriado|domingo|folga)\b/i.test(line);
-
-    if (times.length === 0 && !isHoliday) continue;
-
-    const entry: DayEntry = {
-      ...EMPTY_ENTRY,
-      isHoliday,
-      entrada1: "",
-      saida1: "",
-      entrada2: "",
-      saida2: "",
-    };
-
-    if (times.length === 2) {
-      entry.entrada1 = times[0];
-      entry.saida2 = times[1];
-    } else if (times.length === 3) {
-      entry.entrada1 = times[0];
-      entry.saida1 = times[1];
-      entry.saida2 = times[2];
-    } else if (times.length >= 4) {
-      entry.entrada1 = times[0];
-      entry.saida1 = times[1];
-      entry.entrada2 = times[2];
-      entry.saida2 = times[3];
-    }
-
-    out.push({
-      dateKey,
-      monthKey,
-      entry,
-    });
-  }
-
-  return out;
-}
-
-async function parseImageFile(file: File, selectedYear: number, selectedMonth: number): Promise<ImportedRow[]> {
-  const { createWorker } = (await import("tesseract.js")) as any;
-  const worker = createWorker({ logger: () => null });
-
-  try {
-    await worker.load();
-
-    let language = "por";
-    try {
-      await worker.loadLanguage(language);
-      await worker.initialize(language);
-    } catch (err) {
-      console.warn("Portuguese language failed, falling back to English", err);
-      language = "eng";
-      await worker.loadLanguage(language);
-      await worker.initialize(language);
-    }
-
-    const dataUrl = await preprocessImageForOcr(file);
-
-    async function recognizeWithPsm(psm: number) {
-      await worker.setParameters({
-        tessedit_pageseg_mode: psm,
-        tessedit_char_whitelist: "0123456789:./-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-        user_defined_dpi: "300",
-      });
-      const { data } = await worker.recognize(dataUrl);
-      return parseImageRowsFromText(data.text || "", selectedYear, selectedMonth);
-    }
-
-    let rows = await recognizeWithPsm(6);
-    if (rows.length === 0) {
-      rows = await recognizeWithPsm(3);
-    }
-    if (rows.length === 0) {
-      rows = await recognizeWithPsm(4);
-    }
-
-    return rows;
-  } catch (err) {
-    console.error("Erro ao processar imagem OCR:", err);
-    throw err;
-  } finally {
-    await worker.terminate().catch(() => null);
-  }
-}
-
-function DashboardPage() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth());
-  const [dailyGoalMinutes, setDailyGoalMinutes] = useState(480);
-  const [worksSaturday, setWorksSaturday] = useState(true);
-  const [worksSunday, setWorksSunday] = useState(true);
-  const [salary, setSalary] = useState(0);
-  const [monthData, setMonthData] = useState<MonthData>({});
-  const [hydrated, setHydrated] = useState(false);
-
-  // Hydrate from localStorage
-  useEffect(() => {
-    const s = loadStorage();
-    setDailyGoalMinutes(s.dailyGoalMinutes);
-    setWorksSaturday(s.worksSaturday);
-    setWorksSunday(s.worksSunday);
-    setSalary(s.salary);
-    setMonthData(s.months[monthKey(year, month)] ?? {});
-    setHydrated(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Reload month when changing year/month
-  useEffect(() => {
     if (!hydrated) return;
     const s = loadStorage();
     setMonthData(s.months[monthKey(year, month)] ?? {});
