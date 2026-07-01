@@ -31,6 +31,14 @@ export const Route = createFileRoute("/api/extract-image")({
 
           const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
+          const promptText = `Você é um assistente que extrai linhas de cartões de ponto. Recebe uma imagem (anexada) e deve retornar um JSON estrito com a chave "rows", cujo valor é um array de strings. Cada string representa uma linha extraída que contém data e horários no formato aproximado encontrado (por exemplo "01/03 08:00 12:00 13:00 17:00" ou "01/03/2026 08:00 12:00"). Retorne SOMENTE JSON válido, sem explicações.
+
+Exemplo:
+{"rows": ["01/03 08:00 12:00 13:00 17:00", "02/03 08:05 12:05 13:00 17:10"]}
+
+Se nada for encontrado, retorne {"rows": []}.
+`;
+
           const payload = {
             contents: [
               {
@@ -42,7 +50,7 @@ export const Route = createFileRoute("/api/extract-image")({
                     },
                   },
                   {
-                    text: "Extraia todo o texto legível do cartão de ponto nesta imagem. Retorne apenas o texto extraído, preservando datas e horários (formato DD/MM/AAAA ou DD/MM/AA) e horários (HH:MM).",
+                    text: promptText,
                   },
                 ],
               },
@@ -62,9 +70,34 @@ export const Route = createFileRoute("/api/extract-image")({
           }
 
           const candidates = json?.candidates ?? [];
-          const text = (candidates[0]?.content?.parts ?? []).map((p: any) => p.text || "").join("\n").trim();
+          const raw = (candidates[0]?.content?.parts ?? []).map((p: any) => p.text || "").join("\n").trim();
 
-          return new Response(JSON.stringify({ text, selectedYear, selectedMonth }), {
+          // Try to find and parse JSON in the model output
+          let parsedRows: string[] | null = null;
+          try {
+            // If raw is exactly JSON
+            parsedRows = JSON.parse(raw)?.rows ?? null;
+          } catch (e) {
+            // Try to extract JSON substring
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (m) {
+              try {
+                parsedRows = JSON.parse(m[0])?.rows ?? null;
+              } catch (e2) {
+                parsedRows = null;
+              }
+            }
+          }
+
+          if (!Array.isArray(parsedRows)) {
+            // fallback: return raw text so client can try parsing
+            return new Response(JSON.stringify({ text: raw, selectedYear, selectedMonth }), {
+              status: 200,
+              headers: { "content-type": "application/json; charset=utf-8" },
+            });
+          }
+
+          return new Response(JSON.stringify({ rows: parsedRows, selectedYear, selectedMonth }), {
             status: 200,
             headers: { "content-type": "application/json; charset=utf-8" },
           });
