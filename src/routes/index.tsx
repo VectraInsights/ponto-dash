@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Clock, Calendar, Settings2, TrendingUp, Sparkles, Download, Trash2, Upload, FileSpreadsheet } from "lucide-react";
 import {
   EMPTY_ENTRY,
@@ -72,6 +72,85 @@ function monthKey(y: number, m: number) {
 }
 function dayKey(y: number, m: number, d: number) {
   return `${y}-${(m + 1).toString().padStart(2, "0")}-${d.toString().padStart(2, "0")}`;
+}
+
+function normalizeDateKey(dateText: string): string | null {
+  const iso = /^\s*(\d{4})[-/](\d{2})[-/](\d{2})\s*$/.exec(dateText);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
+  const br = /^\s*(\d{2})[\/\-](\d{2})[\/\-](\d{4})\s*$/.exec(dateText);
+  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+
+  return null;
+}
+
+function parseTimesFromText(text: string): string[] {
+  const matches = [...text.matchAll(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g)];
+  return matches.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+}
+
+function parseDateFromText(text: string, fallbackYear?: number): string | null {
+  const match = text.match(/\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b|\b(\d{4}[\/\-]\d{2}[\/\-]\d{2})\b/);
+  if (match) return normalizeDateKey(match[1] || match[2]);
+
+  if (fallbackYear) {
+    const shortMatch = text.match(/\b(\d{2})[\/\-](\d{2})\b/);
+    if (shortMatch) {
+      return normalizeDateKey(`${shortMatch[1]}/${shortMatch[2]}/${fallbackYear}`);
+    }
+  }
+
+  return null;
+}
+
+async function parseImageFile(file: File, selectedYear: number): Promise<{ dateKey: string | null; entry: DayEntry } | null> {
+  const { createWorker } = (await import("tesseract.js")) as any;
+  const worker = createWorker({ logger: () => null });
+  await worker.load();
+
+  let language = "por";
+  try {
+    await worker.loadLanguage(language);
+    await worker.initialize(language);
+  } catch (err) {
+    console.warn("Portuguese language failed, falling back to English", err);
+    language = "eng";
+    await worker.loadLanguage(language);
+    await worker.initialize(language);
+  }
+
+  const reader = new FileReader();
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  const { data } = await worker.recognize(dataUrl);
+  await worker.terminate();
+
+  const text = data.text || "";
+  const dateKey = parseDateFromText(text, selectedYear);
+  const times = parseTimesFromText(text);
+
+  if (times.length < 2) return null;
+
+  const entry: DayEntry = {
+    ...EMPTY_ENTRY,
+    isHoliday: false,
+  };
+
+  if (times.length === 2) {
+    entry.entrada1 = times[0];
+    entry.saida2 = times[1];
+  } else {
+    entry.entrada1 = times[0] || "";
+    entry.saida1 = times[1] || "";
+    entry.entrada2 = times[2] || "";
+    entry.saida2 = times[3] || "";
+  }
+
+  return { dateKey, entry };
 }
 
 function DashboardPage() {
@@ -214,10 +293,38 @@ function DashboardPage() {
   const salaryPerHour = totals.expected > 0 ? salary / (totals.expected / 60) : 0;
   const estimatedOvertimeValue = (totals.extraTotalWeighted / 60) * salaryPerHour;
 
-  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleImportFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+
+    const isImage = file.type.startsWith("image/") || /\.(jpe?g|png|bmp|webp|tiff?)$/i.test(file.name);
+    if (isImage) {
+      toast.loading("Processando imagem...", { id: "file-import" });
+      try {
+          const parsed = await parseImageFile(file, year);
+        }
+
+        const s = loadStorage();
+        const dateKey = parsed.dateKey ?? dayKey(year, month, new Date().getDate());
+        const monthKeyFromDate = dateKey.slice(0, 7);
+        s.months[monthKeyFromDate] = s.months[monthKeyFromDate] ?? {};
+        s.months[monthKeyFromDate][dateKey] = parsed.entry;
+        saveStorage(s);
+
+        const [y, m] = dateKey.split("-").map(Number);
+        setYear(y);
+        setMonth(m - 1);
+        setMonthData(s.months[monthKeyFromDate] ?? {});
+
+        toast.success("Imagem importada com sucesso.", { id: "file-import" });
+      } catch (err) {
+        console.error(err);
+        toast.error("Erro ao processar a imagem. Tente outra foto mais nítida.", { id: "file-import" });
+      }
+      return;
+    }
+
     try {
       const rows = await parseImportFile(file);
       if (rows.length === 0) {
@@ -274,7 +381,7 @@ function DashboardPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.xls,.csv,image/*"
               className="hidden"
               onChange={handleImportFile}
             />
@@ -282,7 +389,7 @@ function DashboardPage() {
               <FileSpreadsheet className="mr-2 h-4 w-4" /> Baixar modelo
             </Button>
             <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
-              <Upload className="mr-2 h-4 w-4" /> Importar planilha
+              <Upload className="mr-2 h-4 w-4" /> Importar arquivo
             </Button>
             <Button variant="outline" size="sm" onClick={exportCsv}>
               <Download className="mr-2 h-4 w-4" /> Exportar CSV
