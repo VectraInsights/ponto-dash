@@ -277,5 +277,45 @@
         </table>
       </div>
     </div>
+    <script>
+      // Detecta seleção de arquivo e processa OCR automaticamente
+      const fileInput = document.querySelector('input[name="image"]');
+      if (fileInput) {
+        fileInput.addEventListener('change', async function(event) {
+          const file = event.target.files[0];
+          if (!file) return;
+          
+          const formData = new FormData();
+          formData.append('file', file);
+          
+          try {
+            const response = await fetch('/ocr', {
+              method: 'POST',
+              body: formData
+            });
+            
+            if (!response.ok) {
+              alert('Erro ao processar imagem');
+              return;
+            }
+            
+            const data = await response.json();
+            
+            // Preenche os campos com os horários extraídos
+            if (data.entry) document.querySelector('input[name="entry"]').value = data.entry;
+            if (data.lunch_out) document.querySelector('input[name="lunch_out"]').value = data.lunch_out;
+            if (data.lunch_in) document.querySelector('input[name="lunch_in"]').value = data.lunch_in;
+            if (data.exit_time) document.querySelector('input[name="exit_time"]').value = data.exit_time;
+            
+            // Limpa a seleção de arquivo após processar
+            fileInput.value = '';
+            
+          } catch (error) {
+            console.error('Erro:', error);
+            alert('Erro ao processar imagem: ' + error.message);
+          }
+        });
+      }
+    </script>
   </body>
 </html>

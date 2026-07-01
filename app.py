@@ -3,11 +3,14 @@ from __future__ import annotations
 import csv
 import io
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from PIL import Image
+import pytesseract
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "templates"
@@ -27,6 +30,34 @@ def parse_time(value: str) -> datetime | None:
         return datetime.strptime(value, "%H:%M")
     except ValueError:
         return None
+
+
+def extract_times_from_image(image_path: str) -> Dict[str, str]:
+    """Extrai horários de uma imagem usando OCR."""
+    try:
+        image = Image.open(image_path)
+        text = pytesseract.image_to_string(image)
+        
+        # Procura por padrões de horário HH:MM
+        times = re.findall(r'\b([0-1][0-9]|2[0-3]):([0-5][0-9])\b', text)
+        
+        result = {
+            "entry": "",
+            "lunch_out": "",
+            "lunch_in": "",
+            "exit_time": ""
+        }
+        
+        # Atribui os horários encontrados em ordem
+        time_labels = ["entry", "lunch_out", "lunch_in", "exit_time"]
+        for idx, (hour, minute) in enumerate(times[:4]):
+            if idx < len(time_labels):
+                result[time_labels[idx]] = f"{hour}:{minute}"
+        
+        return result
+    except Exception as e:
+        print(f"Erro ao processar imagem: {e}")
+        return {"entry": "", "lunch_out": "", "lunch_in": "", "exit_time": "", "error": str(e)}
 
 
 def calculate_daily_hours(entry: str, lunch_out: str, lunch_in: str, exit_time: str) -> Dict[str, Any]:
@@ -198,6 +229,36 @@ def clear_records_route():
     clear_all_records()
     flash("Todos os registros foram removidos.")
     return redirect(url_for("index"))
+
+
+@app.route("/ocr", methods=["POST"])
+def process_ocr():
+    """Processa uma imagem e extrai horários usando OCR."""
+    if "file" not in request.files:
+        return jsonify({"error": "Arquivo não fornecido"}), 400
+    
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "Arquivo não selecionado"}), 400
+    
+    try:
+        # Salva temporariamente a imagem
+        upload_dir = BASE_DIR / "uploads"
+        upload_dir.mkdir(exist_ok=True)
+        
+        filename = f"temp_{datetime.now().timestamp()}.png"
+        filepath = upload_dir / filename
+        file.save(str(filepath))
+        
+        # Extrai horários da imagem
+        times = extract_times_from_image(str(filepath))
+        
+        # Remove arquivo temporário
+        filepath.unlink()
+        
+        return jsonify(times)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
