@@ -397,9 +397,7 @@ function DashboardPage() {
       const monthKeyToExport = monthKey(exportYear, monthIndex);
       const daysInThisMonth = daysInMonth(exportYear, monthIndex);
       const monthRows: (string | number)[][] = [
-        ["Relatório de ponto", monthName],
-        ["Total horas extras pagas (ponderadas)", ""],
-        ["Total horas extras reais", ""],
+        ["Total Horas Extras", ""],
         [],
         ["Data", "Dia", "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", "Trabalhado", "Extra", "Adicional", "Feriado"],
       ];
@@ -430,8 +428,7 @@ function DashboardPage() {
         ]);
       }
 
-      monthRows[1][1] = formatMinutes(monthExtra50 * 1.5 + monthExtra100 * 2);
-      monthRows[2][1] = formatMinutes(monthExtra50 + monthExtra100);
+      monthRows[0][1] = formatMinutesAsClock(monthExtra50 + monthExtra100);
       sheets[monthName] = monthRows;
     }
 

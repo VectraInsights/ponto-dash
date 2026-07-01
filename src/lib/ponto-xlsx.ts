@@ -181,18 +181,6 @@ export function downloadWorkbook(filename: string, sheets: Record<string, (strin
   for (const sheetName of Object.keys(sheets)) {
     const rows = sheets[sheetName];
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws["!cols"] = [
-      { wch: 22 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 12 },
-    ];
 
     const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
     for (let R = range.s.r; R <= range.e.r; ++R) {
@@ -202,10 +190,8 @@ export function downloadWorkbook(filename: string, sheets: Record<string, (strin
         if (!cell || cell.v === undefined || cell.v === "") continue;
 
         if (R === 0) {
-          cell.s = titleStyle;
-        } else if (R === 1 || R === 3 || R === 4) {
           cell.s = summaryStyle;
-        } else if (R === 6) {
+        } else if (R === 2) {
           cell.s = headerStyle;
         } else if (C >= 6) {
           cell.s = numericStyle;
@@ -214,6 +200,22 @@ export function downloadWorkbook(filename: string, sheets: Record<string, (strin
         }
       }
     }
+
+    const columnWidths = Array(range.e.c - range.s.c + 1).fill(0);
+    for (let R = range.s.r; R <= range.e.r; ++R) {
+      for (let C = range.s.c; C <= range.e.c; ++C) {
+        const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+        const cell = ws[cellAddress];
+        if (!cell || cell.v === undefined || cell.v === "") continue;
+
+        const text = String(cell.v);
+        const width = Math.min(30, Math.max(8, text.length + 2));
+        columnWidths[C - range.s.c] = Math.max(columnWidths[C - range.s.c], width);
+      }
+    }
+
+    ws["!cols"] = columnWidths.map((wch) => ({ wch }));
+    ws["!rows"] = Array.from({ length: range.e.r + 1 }, () => ({ hpt: 20 }));
 
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
   }
