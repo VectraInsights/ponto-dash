@@ -206,7 +206,6 @@
               <a href="{{ url_for('index') }}"><button class="secondary" type="button">Cancelar</button></a>
             {% endif %}
           </div>
-          <p class="note">📸 Selecione uma foto do cartão de ponto e o sistema extrairá os horários automaticamente usando IA no navegador (funciona 100% na nuvem, sem instalações extras).</p>
         </form>
       </div>
 
@@ -252,12 +251,24 @@
           <tbody>
             {% for item in records %}
               <tr>
-                <td>{{ item.date }}</td>
+                <td><strong>{{ item.date }}</strong></td>
                 <td>{{ item.entry or '-' }}</td>
-                <td>{{ item.lunch_out or '-' }} / {{ item.lunch_in or '-' }}</td>
+                <td>{{ item.lunch_out or '-' }} a {{ item.lunch_in or '-' }}</td>
                 <td>{{ item.exit_time or '-' }}</td>
-                <td>{% if item.worked_minutes %}{{ item.worked_minutes // 60 }}h{{ item.worked_minutes % 60 }}m{% else %}-{% endif %}</td>
-                <td>{% if item.extra_minutes %}{% if item.extra_minutes > 0 %}+{% else %}-{% endif %}{{ item.extra_minutes // 60 }}h{{ (item.extra_minutes % 60) }}m{% else %}-{% endif %}</td>
+                <td>
+                  {% if item.worked_minutes %}
+                    <strong>{{ item.worked_minutes // 60 }}h{{ "%02d"|format(item.worked_minutes % 60) }}m</strong>
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>
+                  {% if item.extra_minutes %}
+                    <strong>{% if item.extra_minutes > 0 %}+{% else %}-{% endif %}{{ (item.extra_minutes|abs) // 60 }}h{{ "%02d"|format((item.extra_minutes|abs) % 60) }}m</strong>
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
                 <td class="status {{ item.status }}">{{ item.status }}</td>
                 <td>
                   <div class="actions">
@@ -307,24 +318,35 @@
               
               // Preenche os campos com os 4 primeiros horários encontrados
               const fields = ['entry', 'lunch_out', 'lunch_in', 'exit_time'];
+              let filledCount = 0;
+              
               fields.forEach((field, idx) => {
                 if (times[idx]) {
                   document.querySelector(`input[name="${field}"]`).value = times[idx];
+                  filledCount++;
                 }
               });
               
               // Remove indicador de carregamento
               status.remove();
               
-              if (times.length > 0) {
-                status.textContent = `✓ ${times.length} horário(s) extraído(s)`;
+              if (filledCount > 0) {
+                status.textContent = `✓ ${filledCount} horário(s) extraído(s) - Salvando...`;
                 status.style.color = '#15803d';
                 label.appendChild(status);
-                setTimeout(() => status.remove(), 2000);
+                
+                // Limpa a seleção de arquivo
+                fileInput.value = '';
+                
+                // Submete o formulário automaticamente após 500ms
+                setTimeout(() => {
+                  document.querySelector('form').submit();
+                }, 500);
+              } else {
+                status.textContent = '⚠ Nenhum horário encontrado na imagem';
+                status.style.color = '#ea580c';
+                setTimeout(() => status.remove(), 3000);
               }
-              
-              // Limpa a seleção de arquivo após processar
-              fileInput.value = '';
             };
             reader.readAsDataURL(file);
           } catch (error) {
