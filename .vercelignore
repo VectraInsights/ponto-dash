@@ -1,9 +1,0 @@
-.git
-.pytest_cache
-tests
-__pycache__
-*.pyc
-*.pyo
-.env
-.env.local
-ponto.db
