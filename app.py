@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime
@@ -22,25 +23,36 @@ except ImportError:  # pragma: no cover
     pytesseract = None
 
 
+IS_VERCEL = os.getenv("VERCEL") == "1"
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
-DB_PATH = BASE_DIR / "ponto.db"
+
+if IS_VERCEL:
+    DB_PATH = "/tmp/ponto.db"
+    TEMPLATE_DIR = BASE_DIR / "templates"
+else:
+    DB_PATH = BASE_DIR / "ponto.db"
+    TEMPLATE_DIR = BASE_DIR / "templates"
+
 DATA_FILE = BASE_DIR / "data.json"
-TEMPLATE_DIR = BASE_DIR / "templates"
 EXPECTED_HOURS = 8
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
-app.secret_key = "ponto-dashboard-secret"
+app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=None)
+app.secret_key = os.getenv("FLASK_SECRET", "ponto-dashboard-secret")
 app.config["UPLOAD_FOLDER"] = str(UPLOAD_DIR)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
 
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        print(f"Erro ao conectar ao banco: {e}")
+        raise
 
 
 def init_db() -> None:
