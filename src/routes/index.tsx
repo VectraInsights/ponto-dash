@@ -302,7 +302,10 @@ function DashboardPage() {
     if (isImage) {
       toast.loading("Processando imagem...", { id: "file-import" });
       try {
-          const parsed = await parseImageFile(file, year);
+        const parsed = await parseImageFile(file, year);
+        if (!parsed) {
+          toast.error("Não foi possível extrair horários da foto.", { id: "file-import" });
+          return;
         }
 
         const s = loadStorage();
