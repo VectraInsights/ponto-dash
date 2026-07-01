@@ -143,6 +143,84 @@ export function downloadMonthFile(filename: string, rows: (string | number)[][])
   XLSX.writeFile(wb, filename, { bookType: "xlsx", bookSST: false, cellStyles: true });
 }
 
+export function downloadWorkbook(filename: string, sheets: Record<string, (string | number)[][]>) {
+  const wb = XLSX.utils.book_new();
+
+  const borderStyle = {
+    top: { style: "thin", color: { rgb: "FF000000" } },
+    bottom: { style: "thin", color: { rgb: "FF000000" } },
+    left: { style: "thin", color: { rgb: "FF000000" } },
+    right: { style: "thin", color: { rgb: "FF000000" } },
+  };
+  const titleStyle = {
+    font: { bold: true, sz: 14, color: { rgb: "FF1F4E78" } },
+    fill: { fgColor: { rgb: "FFDCE6F1" } },
+    alignment: { horizontal: "left" as const, vertical: "center" as const },
+  };
+  const summaryStyle = {
+    font: { bold: true, color: { rgb: "FF1F4E78" } },
+    fill: { fgColor: { rgb: "FFF2F2F2" } },
+    border: borderStyle,
+    alignment: { horizontal: "left" as const, vertical: "center" as const },
+  };
+  const headerStyle = {
+    font: { bold: true, color: { rgb: "FFFFFFFF" } },
+    fill: { fgColor: { rgb: "FF1F4E78" } },
+    border: borderStyle,
+    alignment: { horizontal: "center" as const, vertical: "center" as const },
+  };
+  const bodyStyle = {
+    border: borderStyle,
+    alignment: { horizontal: "left" as const, vertical: "center" as const },
+  };
+  const numericStyle = {
+    ...bodyStyle,
+    alignment: { horizontal: "center" as const, vertical: "center" as const },
+  };
+
+  for (const sheetName of Object.keys(sheets)) {
+    const rows = sheets[sheetName];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [
+      { wch: 22 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 12 },
+    ];
+
+    const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
+    for (let R = range.s.r; R <= range.e.r; ++R) {
+      for (let C = range.s.c; C <= range.e.c; ++C) {
+        const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+        const cell = ws[cellAddress];
+        if (!cell || cell.v === undefined || cell.v === "") continue;
+
+        if (R === 0) {
+          cell.s = titleStyle;
+        } else if (R === 1 || R === 3 || R === 4) {
+          cell.s = summaryStyle;
+        } else if (R === 6) {
+          cell.s = headerStyle;
+        } else if (C >= 6) {
+          cell.s = numericStyle;
+        } else {
+          cell.s = bodyStyle;
+        }
+      }
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  }
+
+  XLSX.writeFile(wb, filename, { bookType: "xlsx", bookSST: false, cellStyles: true });
+}
+
 function normalizeTime(v: unknown): string {
   if (v === null || v === undefined || v === "") return "";
   if (typeof v === "number") {

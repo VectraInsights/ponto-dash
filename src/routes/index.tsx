@@ -13,7 +13,7 @@ import {
   formatMinutesAsClock,
   type DayEntry,
 } from "@/lib/ponto";
-import { downloadTemplate, parseImportFile, downloadMonthFile, type ImportedRow } from "@/lib/ponto-xlsx";
+import { downloadTemplate, parseImportFile, downloadWorkbook, type ImportedRow } from "@/lib/ponto-xlsx";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -80,7 +80,12 @@ function normalizeDateKey(dateText: string): string | null {
 
   const br = /^\s*(\d{2})[\/\-](\d{2})[\/\-](\d{4})\s*$/.exec(dateText);
   if (br) return `${br[3]}-${br[2]}-${br[1]}`;
-
+  const short = /^\s*(\d{2})[\/-](\d{2})[\/-](\d{2})\s*$/.exec(dateText);
+  if (short) {
+    const year = Number(short[3]);
+    const fullYear = year >= 50 ? 1900 + year : 2000 + year;
+    return `${fullYear}-${short[2]}-${short[1]}`;
+  }
   return null;
 }
 
@@ -90,6 +95,7 @@ function normalizeOcrText(text: string): string {
     .replace(/[\[\]{}|]/g, " ")
     .replace(/([0-9])[lI](?=[0-9])/g, "$11")
     .replace(/([0-9])[oO](?=[0-9])/g, "$10")
+    .replace(/[,;·]/g, ":")
     .replace(/[^0-9A-Za-z:./\-\s\n]/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\s*\n\s*/g, "\n")
@@ -98,17 +104,34 @@ function normalizeOcrText(text: string): string {
 
 function parseTimesFromText(text: string): string[] {
   const matches = [...text.matchAll(/\b([01]?\d|2[0-3])(?:[:h.·\-\s]+)([0-5]\d)\b/g)];
-  return matches.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+  if (matches.length > 0) {
+    return matches.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+  }
+
+  const spaced = [...text.matchAll(/(?<!\d)([01]?\d|2[0-3])\s+([0-5]\d)(?!\d)/g)];
+  if (spaced.length > 0) {
+    return spaced.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+  }
+
+  const fallback = [...text.matchAll(/(?<!\d)([01]?\d|2[0-3])([0-5]\d)(?!\d)/g)];
+  return fallback.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
 }
 
 function parseDateFromText(text: string, fallbackYear?: number): string | null {
-  const match = text.match(/\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b|\b(\d{4}[\/\-]\d{2}[\/\-]\d{2})\b/);
-  if (match) return normalizeDateKey(match[1] || match[2]);
+  const match = text.match(
+    /\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b|\b(\d{4}[\/\-]\d{2}[\/\-]\d{2})\b|\b(\d{2}[\/\-]\d{2}[\/\-]\d{2})\b/
+  );
+  if (match) {
+    const normalized = normalizeDateKey(match[1] || match[2] || match[3]);
+    if (normalized) return normalized;
+  }
 
   if (fallbackYear) {
-    const shortMatch = text.match(/\b(\d{2})[\/\-](\d{2})\b/);
+    const shortMatch = text.match(/\b(\d{1,2})[\/\-](\d{1,2})\b/);
     if (shortMatch) {
-      return normalizeDateKey(`${shortMatch[1]}/${shortMatch[2]}/${fallbackYear}`);
+      const day = shortMatch[1].padStart(2, "0");
+      const month = shortMatch[2].padStart(2, "0");
+      return normalizeDateKey(`${day}/${month}/${fallbackYear}`);
     }
   }
 
@@ -164,41 +187,55 @@ function parseImageRowsFromText(text: string, selectedYear: number, selectedMont
       continue;
     }
 
-    let dayMatch = line.match(/^\s*([1-9]|[12]\d|3[01])\b/);
-    let day = dayMatch ? Number(dayMatch[1]) : 0;
-    if (!dayMatch) {
-      const fallbackMatch = line.match(/\b([1-9]|[12]\d|3[01])\b(?!\s*[:h.])/);
-      if (!fallbackMatch) continue;
-      day = Number(fallbackMatch[1]);
-      line = line.slice(line.indexOf(fallbackMatch[0]) + fallbackMatch[0].length);
+    const explicitDate = parseDateFromText(line, selectedYear);
+    let dateKey: string | null = explicitDate;
+    let day: number | null = null;
+
+    if (explicitDate) {
+      day = Number(explicitDate.split("-")[2]);
+    } else {
+      const dayMatch = line.match(/^[^\d]*([1-9]|[12]\d|3[01])\b/);
+      if (dayMatch) {
+        day = Number(dayMatch[1]);
+      } else {
+        const fallbackMatch = line.match(/\b([1-9]|[12]\d|3[01])\b(?![:h.])/);
+        if (fallbackMatch) {
+          day = Number(fallbackMatch[1]);
+        }
+      }
+      if (!day) continue;
+      dateKey = `${selectedYear}-${(selectedMonth + 1).toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
     }
 
-    if (!day || day < 1 || day > 31) continue;
-
-    const explicitDate = parseDateFromText(line, selectedYear);
-    const dateKey = explicitDate
-      ? explicitDate
-      : `${selectedYear}-${(selectedMonth + 1).toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+    if (!dateKey) continue;
     const monthKey = dateKey.slice(0, 7);
 
     const times = parseTimesFromText(line);
-    const isHoliday = /\b(feriado|domingo)\b/i.test(line);
+    const isHoliday = /\b(feriado|domingo|folga)\b/i.test(line);
 
     if (times.length === 0 && !isHoliday) continue;
 
     const entry: DayEntry = {
       ...EMPTY_ENTRY,
       isHoliday,
-      entrada1: times[0] || "",
-      saida1: times[1] || "",
-      entrada2: times[2] || "",
-      saida2: times[3] || "",
+      entrada1: "",
+      saida1: "",
+      entrada2: "",
+      saida2: "",
     };
 
     if (times.length === 2) {
+      entry.entrada1 = times[0];
       entry.saida2 = times[1];
-      entry.saida1 = "";
-      entry.entrada2 = "";
+    } else if (times.length === 3) {
+      entry.entrada1 = times[0];
+      entry.saida1 = times[1];
+      entry.saida2 = times[2];
+    } else if (times.length >= 4) {
+      entry.entrada1 = times[0];
+      entry.saida1 = times[1];
+      entry.entrada2 = times[2];
+      entry.saida2 = times[3];
     }
 
     out.push({
@@ -231,7 +268,7 @@ async function parseImageFile(file: File, selectedYear: number, selectedMonth: n
 
     const dataUrl = await preprocessImageForOcr(file);
 
-    async function recognizeWithPsm(psm: string) {
+    async function recognizeWithPsm(psm: number) {
       await worker.setParameters({
         tessedit_pageseg_mode: psm,
         tessedit_char_whitelist: "0123456789:./-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
@@ -241,12 +278,12 @@ async function parseImageFile(file: File, selectedYear: number, selectedMonth: n
       return parseImageRowsFromText(data.text || "", selectedYear, selectedMonth);
     }
 
-    let rows = await recognizeWithPsm("6");
+    let rows = await recognizeWithPsm(6);
     if (rows.length === 0) {
-      rows = await recognizeWithPsm("3");
+      rows = await recognizeWithPsm(3);
     }
     if (rows.length === 0) {
-      rows = await recognizeWithPsm("4");
+      rows = await recognizeWithPsm(4);
     }
 
     return rows;
@@ -351,42 +388,54 @@ function DashboardPage() {
   }
 
   function exportXlsx() {
-    const totalActualExtra = totals.extra50 + totals.extra100;
-    const rows: (string | number)[][] = [
-      ["Relatório de ponto", ""],
-      ["Mês", `${MONTH_LABELS[month]}/${year}`],
-      [],
-      ["Total horas extras pagas (ponderadas)", formatMinutes(totals.extraTotalWeighted)],
-      ["Total horas extras reais", formatMinutes(totalActualExtra)],
-      [],
-      ["Data", "Dia", "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", "Trabalhado", "Extra", "Adicional", "Feriado"],
-    ];
+    const storage = loadStorage();
+    const monthKeys = Object.keys(storage.months).sort();
+    const exportMonths = monthKeys.length > 0 ? monthKeys : [monthKey(year, month)];
+    const sheets: Record<string, (string | number)[][]> = {};
 
-    for (const day of days) {
-      const hasValue =
-        day.entry.entrada1 ||
-        day.entry.saida1 ||
-        day.entry.entrada2 ||
-        day.entry.saida2 ||
-        day.entry.isHoliday;
-      if (!hasValue) continue;
+    for (const monthKeyToExport of exportMonths) {
+      const [y, m] = monthKeyToExport.split("-").map(Number);
+      const daysInThisMonth = daysInMonth(y, m - 1);
+      const monthRows: (string | number)[][] = [
+        ["Relatório de ponto", monthKeyToExport],
+        ["Total horas extras pagas (ponderadas)", ""],
+        ["Total horas extras reais", ""],
+        [],
+        ["Data", "Dia", "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", "Trabalhado", "Extra", "Adicional", "Feriado"],
+      ];
 
-      const dateParts = day.key.split("-");
-      const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
-      rows.push([
-        formattedDate,
-        WEEKDAY_LABELS[day.date.getDay()],
-        day.entry.entrada1,
-        day.entry.saida1,
-        day.entry.entrada2,
-        day.entry.saida2,
-        formatMinutesAsClock(day.result.workedMinutes),
-        formatMinutesAsClock(day.result.extraMinutes),
-        day.result.multiplier === 2 ? "100%" : day.result.multiplier === 1.5 ? "50%" : "",
-        day.entry.isHoliday ? "Sim" : "",
-      ]);
+      let monthExtra50 = 0;
+      let monthExtra100 = 0;
+      for (let d = 1; d <= daysInThisMonth; d++) {
+        const date = new Date(y, m - 1, d);
+        const dateKeyValue = dayKey(y, m - 1, d);
+        const entry = storage.months[monthKeyToExport]?.[dateKeyValue] ?? EMPTY_ENTRY;
+        const result = computeDay(entry, date, storage.dailyGoalMinutes, storage.worksSaturday, storage.worksSunday);
+
+        if (result.multiplier === 1.5) monthExtra50 += result.extraMinutes;
+        if (result.multiplier === 2) monthExtra100 += result.extraMinutes;
+
+        const formattedDate = `${d.toString().padStart(2, "0")}/${m.toString().padStart(2, "0")}/${y}`;
+        monthRows.push([
+          formattedDate,
+          WEEKDAY_LABELS[date.getDay()],
+          entry.entrada1,
+          entry.saida1,
+          entry.entrada2,
+          entry.saida2,
+          formatMinutesAsClock(result.workedMinutes),
+          formatMinutesAsClock(result.extraMinutes),
+          result.multiplier === 2 ? "100%" : result.multiplier === 1.5 ? "50%" : "",
+          entry.isHoliday ? "Sim" : "",
+        ]);
+      }
+
+      monthRows[1][1] = formatMinutes(monthExtra50 * 1.5 + monthExtra100 * 2);
+      monthRows[2][1] = formatMinutes(monthExtra50 + monthExtra100);
+      sheets[monthKeyToExport] = monthRows;
     }
-    downloadMonthFile(`ponto-${monthKey(year, month)}.xlsx`, rows);
+
+    downloadWorkbook(`ponto-todos-meses.xlsx`, sheets);
   }
 
   const fileInputRef = useRef<HTMLInputElement>(null);
