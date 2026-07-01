@@ -290,68 +290,142 @@
     </div>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
     <script>
+      // Preenche data automaticamente com hoje
+      const dateInput = document.querySelector('input[name="date"]');
+      if (dateInput && !dateInput.value) {
+        const today = new Date().toISOString().split('T')[0];
+        dateInput.value = today;
+      }
+
       const fileInput = document.querySelector('input[name="image"]');
       if (fileInput) {
         fileInput.addEventListener('change', async function(event) {
           const file = event.target.files[0];
           if (!file) return;
           
-          // Mostra indicador de carregamento
           const label = fileInput.closest('label');
           const status = document.createElement('p');
-          status.textContent = '⏳ Processando imagem...';
+          status.id = 'ocr-status';
+          status.textContent = '⏳ Carregando biblioteca OCR...';
           status.style.color = '#94a3b8';
           status.style.fontSize = '12px';
+          status.style.marginTop = '8px';
           label.appendChild(status);
           
           try {
             const reader = new FileReader();
+            reader.onerror = function() {
+              status.textContent = '❌ Erro ao ler arquivo';
+              status.style.color = '#dc2626';
+              console.error('Erro FileReader:', reader.error);
+            };
+            
             reader.onload = async function(e) {
-              const { createWorker } = Tesseract;
-              const worker = await createWorker('por');
-              
-              const { data: { text } } = await worker.recognize(e.target.result);
-              await worker.terminate();
-              
-              // Extrai horários (padrão HH:MM)
-              const times = text.match(/\b([0-1][0-9]|2[0-3]):([0-5][0-9])\b/g) || [];
-              
-              // Preenche os campos com os 4 primeiros horários encontrados
-              const fields = ['entry', 'lunch_out', 'lunch_in', 'exit_time'];
-              let filledCount = 0;
-              
-              fields.forEach((field, idx) => {
-                if (times[idx]) {
-                  document.querySelector(`input[name="${field}"]`).value = times[idx];
-                  filledCount++;
-                }
-              });
-              
-              // Remove indicador de carregamento
-              status.remove();
-              
-              if (filledCount > 0) {
-                status.textContent = `✓ ${filledCount} horário(s) extraído(s) - Salvando...`;
-                status.style.color = '#15803d';
-                label.appendChild(status);
+              try {
+                status.textContent = '⏳ Processando imagem com OCR...';
                 
-                // Limpa a seleção de arquivo
+                const { createWorker } = Tesseract;
+                if (!createWorker) {
+                  throw new Error('Tesseract.js não carregou corretamente');
+                }
+                
+                console.log('Iniciando worker Tesseract...');
+                
+                // Tenta português primeiro, se falhar usa inglês
+                let worker;
+                try {
+                  worker = await createWorker('por', undefined, { 
+                    workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/worker.min.js'
+                  });
+                  console.log('Worker português carregado');
+                } catch (err) {
+                  console.log('Português falhou, usando inglês:', err);
+                  status.textContent = '⏳ Usando OCR em inglês...';
+                  worker = await createWorker('eng', undefined, {
+                    workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/worker.min.js'
+                  });
+                }
+                
+                console.log('Reconhecendo texto...');
+                const result = await worker.recognize(e.target.result);
+                const text = result.data.text;
+                
+                console.log('Texto extraído:', text);
+                
+                await worker.terminate();
+                console.log('Worker terminado');
+                
+                // Extrai horários (padrão HH:MM)
+                const timePattern = /([0-1][0-9]|2[0-3]):([0-5][0-9])/g;
+                const matches = [...text.matchAll(timePattern)];
+                const times = matches.map(m => m[0]);
+                
+                console.log('Horários encontrados:', times);
+                
+                // Preenche os campos com os horários encontrados
+                const fields = ['entry', 'lunch_out', 'lunch_in', 'exit_time'];
+                let filledCount = 0;
+                
+                fields.forEach((field, idx) => {
+                  const input = document.querySelector(`input[name="${field}"]`);
+                  if (input && times[idx]) {
+                    input.value = times[idx];
+                    filledCount++;
+                    console.log(`Preenchido ${field}: ${times[idx]}`);
+                  }
+                });
+                
+                // Remove status anterior
+                const oldStatus = document.getElementById('ocr-status');
+                if (oldStatus) oldStatus.remove();
+                
+                if (filledCount > 0) {
+                  const newStatus = document.createElement('p');
+                  newStatus.textContent = `✓ ${filledCount} horário(s) extraído(s)!`;
+                  newStatus.style.color = '#15803d';
+                  newStatus.style.fontSize = '12px';
+                  newStatus.style.marginTop = '8px';
+                  label.appendChild(newStatus);
+                  
+                  // Submete o formulário automaticamente
+                  setTimeout(() => {
+                    console.log('Submetendo formulário...');
+                    document.querySelector('form').submit();
+                  }, 800);
+                } else {
+                  const newStatus = document.createElement('p');
+                  newStatus.textContent = '⚠️ Nenhum horário encontrado. Verifique se a imagem está clara.';
+                  newStatus.style.color = '#ea580c';
+                  newStatus.style.fontSize = '12px';
+                  newStatus.style.marginTop = '8px';
+                  label.appendChild(newStatus);
+                  setTimeout(() => newStatus.remove(), 4000);
+                }
+                
+                // Limpa seleção
                 fileInput.value = '';
                 
-                // Submete o formulário automaticamente após 500ms
-                setTimeout(() => {
-                  document.querySelector('form').submit();
-                }, 500);
-              } else {
-                status.textContent = '⚠ Nenhum horário encontrado na imagem';
-                status.style.color = '#ea580c';
-                setTimeout(() => status.remove(), 3000);
+              } catch (error) {
+                console.error('Erro ao processar OCR:', error);
+                const oldStatus = document.getElementById('ocr-status');
+                if (oldStatus) oldStatus.remove();
+                
+                const errorStatus = document.createElement('p');
+                errorStatus.textContent = `❌ Erro: ${error.message || 'Falha no processamento'}`;
+                errorStatus.style.color = '#dc2626';
+                errorStatus.style.fontSize = '12px';
+                errorStatus.style.marginTop = '8px';
+                label.appendChild(errorStatus);
+                setTimeout(() => errorStatus.remove(), 4000);
+                
+                fileInput.value = '';
               }
             };
+            
             reader.readAsDataURL(file);
           } catch (error) {
-            console.error('Erro:', error);
-            status.textContent = '❌ Erro ao processar imagem';
+            console.error('Erro geral:', error);
+            status.textContent = '❌ Erro ao iniciar processamento';
             status.style.color = '#dc2626';
             setTimeout(() => status.remove(), 3000);
           }
