@@ -26,11 +26,12 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 DB_PATH = BASE_DIR / "ponto.db"
 DATA_FILE = BASE_DIR / "data.json"
+TEMPLATE_DIR = BASE_DIR / "templates"
 EXPECTED_HOURS = 8
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
 app.secret_key = "ponto-dashboard-secret"
 app.config["UPLOAD_FOLDER"] = str(UPLOAD_DIR)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
