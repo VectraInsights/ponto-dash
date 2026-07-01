@@ -13,7 +13,7 @@ import {
   formatMinutesAsClock,
   type DayEntry,
 } from "@/lib/ponto";
-import { downloadTemplate, parseImportFile } from "@/lib/ponto-xlsx";
+import { downloadTemplate, parseImportFile, downloadMonthFile, type ImportedRow } from "@/lib/ponto-xlsx";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -84,8 +84,19 @@ function normalizeDateKey(dateText: string): string | null {
   return null;
 }
 
+function normalizeOcrText(text: string): string {
+  return text
+    .replace(/[\u00A0\u2000-\u200B]/g, " ")
+    .replace(/[\[\]{}|]/g, " ")
+    .replace(/([0-9])[lI](?=[0-9])/g, (_, d) => `${d}1`)
+    .replace(/([0-9])[oO](?=[0-9])/g, (_, d) => `${d}0`)
+    .replace(/[^0-9A-Za-z:./\-\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseTimesFromText(text: string): string[] {
-  const matches = [...text.matchAll(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g)];
+  const matches = [...text.matchAll(/\b([01]?\d|2[0-3])[:h.·]\s*([0-5]\d)\b/g)];
   return matches.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
 }
 
@@ -103,7 +114,103 @@ function parseDateFromText(text: string, fallbackYear?: number): string | null {
   return null;
 }
 
-async function parseImageFile(file: File, selectedYear: number): Promise<{ dateKey: string | null; entry: DayEntry } | null> {
+async function preprocessImageForOcr(file: File): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+
+  const maxSize = 1600;
+  const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(image.width * scale);
+  canvas.height = Math.round(image.height * scale);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas não disponível");
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = Math.round(data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11);
+    const threshold = gray > 150 ? 255 : 0;
+    data[i] = threshold;
+    data[i + 1] = threshold;
+    data[i + 2] = threshold;
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  return canvas.toDataURL("image/png");
+}
+
+function parseImageRowsFromText(text: string, selectedYear: number, selectedMonth: number): ImportedRow[] {
+  const normalized = normalizeOcrText(text);
+  const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const out: ImportedRow[] = [];
+
+  for (let line of lines) {
+    line = line.replace(/\s{2,}/g, " ");
+    if (/^(?:dia|ent|sai|total|observa|quinzena|empregador|cargo|assinatura|1o|1ª|2o|2ª)/i.test(line)) {
+      continue;
+    }
+
+    let dayMatch = line.match(/^\s*([1-9]|[12]\d|3[01])\b/);
+    let day = dayMatch ? Number(dayMatch[1]) : 0;
+    if (!dayMatch) {
+      const fallbackMatch = line.match(/\b([1-9]|[12]\d|3[01])\b(?!\s*[:h.])/);
+      if (!fallbackMatch) continue;
+      day = Number(fallbackMatch[1]);
+      line = line.slice(line.indexOf(fallbackMatch[0]) + fallbackMatch[0].length);
+    }
+
+    if (!day || day < 1 || day > 31) continue;
+
+    const explicitDate = parseDateFromText(line, selectedYear);
+    const dateKey = explicitDate
+      ? explicitDate
+      : `${selectedYear}-${(selectedMonth + 1).toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+    const monthKey = dateKey.slice(0, 7);
+
+    const times = parseTimesFromText(line);
+    const isHoliday = /\b(feriado|domingo)\b/i.test(line);
+
+    if (times.length === 0 && !isHoliday) continue;
+
+    const entry: DayEntry = {
+      ...EMPTY_ENTRY,
+      isHoliday,
+      entrada1: times[0] || "",
+      saida1: times[1] || "",
+      entrada2: times[2] || "",
+      saida2: times[3] || "",
+    };
+
+    if (times.length === 2) {
+      entry.saida2 = times[1];
+      entry.saida1 = "";
+      entry.entrada2 = "";
+    }
+
+    out.push({
+      dateKey,
+      monthKey,
+      entry,
+    });
+  }
+
+  return out;
+}
+
+async function parseImageFile(file: File, selectedYear: number, selectedMonth: number): Promise<ImportedRow[]> {
   const { createWorker } = (await import("tesseract.js")) as any;
   const worker = createWorker({ logger: () => null });
   await worker.load();
@@ -119,38 +226,17 @@ async function parseImageFile(file: File, selectedYear: number): Promise<{ dateK
     await worker.initialize(language);
   }
 
-  const reader = new FileReader();
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
+  await worker.setParameters({
+    tessedit_pageseg_mode: "6",
+    tessedit_char_whitelist: "0123456789:./-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    user_defined_dpi: "300",
   });
 
+  const dataUrl = await preprocessImageForOcr(file);
   const { data } = await worker.recognize(dataUrl);
   await worker.terminate();
 
-  const text = data.text || "";
-  const dateKey = parseDateFromText(text, selectedYear);
-  const times = parseTimesFromText(text);
-
-  if (times.length < 2) return null;
-
-  const entry: DayEntry = {
-    ...EMPTY_ENTRY,
-    isHoliday: false,
-  };
-
-  if (times.length === 2) {
-    entry.entrada1 = times[0];
-    entry.saida2 = times[1];
-  } else {
-    entry.entrada1 = times[0] || "";
-    entry.saida1 = times[1] || "";
-    entry.entrada2 = times[2] || "";
-    entry.saida2 = times[3] || "";
-  }
-
-  return { dateKey, entry };
+  return parseImageRowsFromText(data.text || "", selectedYear, selectedMonth);
 }
 
 function DashboardPage() {
@@ -245,21 +331,11 @@ function DashboardPage() {
     toast.success("Mês limpo");
   }
 
-  function exportCsv() {
+  function exportXlsx() {
     const totalExtra = totals.extra50 + totals.extra100;
-    const rows = [
-      [
-        "Total Horas Extras",
-        formatMinutes(totalExtra),
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-      ],
+    const rows: (string | number)[][] = [
+      ["Total Horas Extras", formatMinutes(totalExtra)],
+      [],
       ["Data", "Dia", "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", "Trabalhado", "Extra", "Adicional", "Feriado"],
     ];
     for (const day of days) {
@@ -278,14 +354,7 @@ function DashboardPage() {
         day.entry.isHoliday ? "Sim" : "",
       ]);
     }
-    const csv = rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `ponto-${monthKey(year, month)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadMonthFile(`ponto-${monthKey(year, month)}.xlsx`, rows);
   }
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -294,57 +363,48 @@ function DashboardPage() {
   const estimatedOvertimeValue = (totals.extraTotalWeighted / 60) * salaryPerHour;
 
   async function handleImportFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []) as File[];
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
 
-    const isImage = file.type.startsWith("image/") || /\.(jpe?g|png|bmp|webp|tiff?)$/i.test(file.name);
-    if (isImage) {
-      toast.loading("Processando imagem...", { id: "file-import" });
-      try {
-        const parsed = await parseImageFile(file, year);
-        if (!parsed) {
-          toast.error("Não foi possível extrair horários da foto.", { id: "file-import" });
-          return;
-        }
-
-        const s = loadStorage();
-        const dateKey = parsed.dateKey ?? dayKey(year, month, new Date().getDate());
-        const monthKeyFromDate = dateKey.slice(0, 7);
-        s.months[monthKeyFromDate] = s.months[monthKeyFromDate] ?? {};
-        s.months[monthKeyFromDate][dateKey] = parsed.entry;
-        saveStorage(s);
-
-        const [y, m] = dateKey.split("-").map(Number);
-        setYear(y);
-        setMonth(m - 1);
-        setMonthData(s.months[monthKeyFromDate] ?? {});
-
-        toast.success("Imagem importada com sucesso.", { id: "file-import" });
-      } catch (err) {
-        console.error(err);
-        toast.error("Erro ao processar a imagem. Tente outra foto mais nítida.", { id: "file-import" });
-      }
-      return;
-    }
-
+    toast.loading(`Importando ${files.length} arquivo(s)...`, { id: "file-import" });
     try {
-      const rows = await parseImportFile(file);
-      if (rows.length === 0) {
-        toast.error("Nenhuma linha válida encontrada na planilha");
-        return;
-      }
       const s = loadStorage();
       let firstMonth = "";
       let count = 0;
-      for (const r of rows) {
-        if (!firstMonth) firstMonth = r.monthKey;
-        s.months[r.monthKey] = s.months[r.monthKey] ?? {};
-        s.months[r.monthKey][r.dateKey] = r.entry;
-        count++;
+
+      for (const file of files) {
+        const isImage = file.type.startsWith("image/") || /\.(jpe?g|png|bmp|webp|tiff?)$/i.test(file.name);
+        let rows: ImportedRow[] = [];
+
+        if (isImage) {
+          rows = await parseImageFile(file, year, month);
+          if (rows.length === 0) {
+            toast.error(`Não foi possível extrair dados de ${file.name}.`, { id: "file-import" });
+            continue;
+          }
+        } else {
+          rows = await parseImportFile(file);
+          if (rows.length === 0) {
+            toast.error(`Nenhuma linha válida encontrada em ${file.name}.`, { id: "file-import" });
+            continue;
+          }
+        }
+
+        for (const r of rows) {
+          if (!firstMonth) firstMonth = r.monthKey;
+          s.months[r.monthKey] = s.months[r.monthKey] ?? {};
+          s.months[r.monthKey][r.dateKey] = r.entry;
+          count++;
+        }
       }
+
+      if (count === 0) {
+        toast.error("Nenhum registro importado.", { id: "file-import" });
+        return;
+      }
+
       saveStorage(s);
-      // Jump to first imported month and reload
       if (firstMonth) {
         const [y, m] = firstMonth.split("-").map(Number);
         setYear(y);
@@ -353,10 +413,11 @@ function DashboardPage() {
       } else {
         setMonthData(s.months[monthKey(year, month)] ?? {});
       }
-      toast.success(`${count} lançamento(s) importado(s)`);
+
+      toast.success(`${count} lançamento(s) importado(s)`, { id: "file-import" });
     } catch (err) {
       console.error(err);
-      toast.error("Não foi possível ler a planilha. Verifique o formato.");
+      toast.error("Erro ao importar arquivo(s). Tente outro formato.", { id: "file-import" });
     }
   }
 
@@ -384,6 +445,7 @@ function DashboardPage() {
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               accept=".xlsx,.xls,.csv,image/*"
               className="hidden"
               onChange={handleImportFile}
@@ -392,10 +454,10 @@ function DashboardPage() {
               <FileSpreadsheet className="mr-2 h-4 w-4" /> Baixar modelo
             </Button>
             <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
-              <Upload className="mr-2 h-4 w-4" /> Importar arquivo
+              <Upload className="mr-2 h-4 w-4" /> Importar arquivos
             </Button>
-            <Button variant="outline" size="sm" onClick={exportCsv}>
-              <Download className="mr-2 h-4 w-4" /> Exportar CSV
+            <Button variant="outline" size="sm" onClick={exportXlsx}>
+              <Download className="mr-2 h-4 w-4" /> Exportar planilha
             </Button>
             <Button variant="outline" size="sm" onClick={clearMonth}>
               <Trash2 className="mr-2 h-4 w-4" /> Limpar mês

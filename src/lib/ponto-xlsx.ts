@@ -66,6 +66,26 @@ export function downloadTemplate() {
   XLSX.writeFile(wb, "modelo-ponto.xlsx");
 }
 
+export function downloadMonthFile(filename: string, rows: (string | number)[][]) {
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [
+    { wch: 12 },
+    { wch: 8 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 12 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 10 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ponto");
+  XLSX.writeFile(wb, filename);
+}
+
 function normalizeTime(v: unknown): string {
   if (v === null || v === undefined || v === "") return "";
   if (typeof v === "number") {
