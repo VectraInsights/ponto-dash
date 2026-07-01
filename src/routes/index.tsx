@@ -88,15 +88,16 @@ function normalizeOcrText(text: string): string {
   return text
     .replace(/[\u00A0\u2000-\u200B]/g, " ")
     .replace(/[\[\]{}|]/g, " ")
-    .replace(/([0-9])[lI](?=[0-9])/g, (_, d) => `${d}1`)
-    .replace(/([0-9])[oO](?=[0-9])/g, (_, d) => `${d}0`)
-    .replace(/[^0-9A-Za-z:./\-\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/([0-9])[lI](?=[0-9])/g, "$11")
+    .replace(/([0-9])[oO](?=[0-9])/g, "$10")
+    .replace(/[^0-9A-Za-z:./\-\s\n]/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
     .trim();
 }
 
 function parseTimesFromText(text: string): string[] {
-  const matches = [...text.matchAll(/\b([01]?\d|2[0-3])[:h.·]\s*([0-5]\d)\b/g)];
+  const matches = [...text.matchAll(/\b([01]?\d|2[0-3])(?:[:h.·\-\s]+)([0-5]\d)\b/g)];
   return matches.map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
 }
 
@@ -228,15 +229,27 @@ async function parseImageFile(file: File, selectedYear: number, selectedMonth: n
       await worker.initialize(language);
     }
 
-    await worker.setParameters({
-      tessedit_pageseg_mode: "6",
-      tessedit_char_whitelist: "0123456789:./-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-      user_defined_dpi: "300",
-    });
-
     const dataUrl = await preprocessImageForOcr(file);
-    const { data } = await worker.recognize(dataUrl);
-    return parseImageRowsFromText(data.text || "", selectedYear, selectedMonth);
+
+    async function recognizeWithPsm(psm: string) {
+      await worker.setParameters({
+        tessedit_pageseg_mode: psm,
+        tessedit_char_whitelist: "0123456789:./-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+        user_defined_dpi: "300",
+      });
+      const { data } = await worker.recognize(dataUrl);
+      return parseImageRowsFromText(data.text || "", selectedYear, selectedMonth);
+    }
+
+    let rows = await recognizeWithPsm("6");
+    if (rows.length === 0) {
+      rows = await recognizeWithPsm("3");
+    }
+    if (rows.length === 0) {
+      rows = await recognizeWithPsm("4");
+    }
+
+    return rows;
   } catch (err) {
     console.error("Erro ao processar imagem OCR:", err);
     throw err;

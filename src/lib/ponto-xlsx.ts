@@ -69,16 +69,20 @@ export function downloadTemplate() {
 export function downloadMonthFile(filename: string, rows: (string | number)[][]) {
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws["!cols"] = [
-    { wch: 18 },
+    { wch: 22 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
     { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 10 },
+  ];
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } },
   ];
 
   const borderStyle = {
@@ -87,15 +91,30 @@ export function downloadMonthFile(filename: string, rows: (string | number)[][])
     left: { style: "thin", color: { rgb: "FF000000" } },
     right: { style: "thin", color: { rgb: "FF000000" } },
   };
+  const titleStyle = {
+    font: { bold: true, sz: 14, color: { rgb: "FF1F4E78" } },
+    fill: { fgColor: { rgb: "FFDCE6F1" } },
+    alignment: { horizontal: "left" as const, vertical: "center" as const },
+  };
+  const summaryStyle = {
+    font: { bold: true, color: { rgb: "FF1F4E78" } },
+    fill: { fgColor: { rgb: "FFF2F2F2" } },
+    border: borderStyle,
+    alignment: { horizontal: "left" as const, vertical: "center" as const },
+  };
   const headerStyle = {
-    font: { bold: true },
-    fill: { fgColor: { rgb: "FFEFEFEF" } },
+    font: { bold: true, color: { rgb: "FFFFFFFF" } },
+    fill: { fgColor: { rgb: "FF1F4E78" } },
     border: borderStyle,
     alignment: { horizontal: "center" as const, vertical: "center" as const },
   };
   const bodyStyle = {
     border: borderStyle,
     alignment: { horizontal: "left" as const, vertical: "center" as const },
+  };
+  const numericStyle = {
+    ...bodyStyle,
+    alignment: { horizontal: "center" as const, vertical: "center" as const },
   };
 
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
@@ -104,7 +123,18 @@ export function downloadMonthFile(filename: string, rows: (string | number)[][])
       const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
       const cell = ws[cellAddress];
       if (!cell || cell.v === undefined || cell.v === "") continue;
-      cell.s = R === 6 ? headerStyle : bodyStyle;
+
+      if (R === 0) {
+        cell.s = titleStyle;
+      } else if (R === 1 || R === 3 || R === 4) {
+        cell.s = summaryStyle;
+      } else if (R === 6) {
+        cell.s = headerStyle;
+      } else if (C >= 6) {
+        cell.s = numericStyle;
+      } else {
+        cell.s = bodyStyle;
+      }
     }
   }
 
