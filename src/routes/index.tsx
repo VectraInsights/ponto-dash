@@ -389,15 +389,15 @@ function DashboardPage() {
 
   function exportXlsx() {
     const storage = loadStorage();
-    const monthKeys = Object.keys(storage.months).sort();
-    const exportMonths = monthKeys.length > 0 ? monthKeys : [monthKey(year, month)];
+    const exportYear = year;
     const sheets: Record<string, (string | number)[][]> = {};
 
-    for (const monthKeyToExport of exportMonths) {
-      const [y, m] = monthKeyToExport.split("-").map(Number);
-      const daysInThisMonth = daysInMonth(y, m - 1);
+    for (let monthIndex = 0; monthIndex < 12; monthIndex++) {
+      const monthName = MONTH_LABELS[monthIndex];
+      const monthKeyToExport = monthKey(exportYear, monthIndex);
+      const daysInThisMonth = daysInMonth(exportYear, monthIndex);
       const monthRows: (string | number)[][] = [
-        ["Relatório de ponto", monthKeyToExport],
+        ["Relatório de ponto", monthName],
         ["Total horas extras pagas (ponderadas)", ""],
         ["Total horas extras reais", ""],
         [],
@@ -407,15 +407,15 @@ function DashboardPage() {
       let monthExtra50 = 0;
       let monthExtra100 = 0;
       for (let d = 1; d <= daysInThisMonth; d++) {
-        const date = new Date(y, m - 1, d);
-        const dateKeyValue = dayKey(y, m - 1, d);
+        const date = new Date(exportYear, monthIndex, d);
+        const dateKeyValue = dayKey(exportYear, monthIndex, d);
         const entry = storage.months[monthKeyToExport]?.[dateKeyValue] ?? EMPTY_ENTRY;
         const result = computeDay(entry, date, storage.dailyGoalMinutes, storage.worksSaturday, storage.worksSunday);
 
         if (result.multiplier === 1.5) monthExtra50 += result.extraMinutes;
         if (result.multiplier === 2) monthExtra100 += result.extraMinutes;
 
-        const formattedDate = `${d.toString().padStart(2, "0")}/${m.toString().padStart(2, "0")}/${y}`;
+        const formattedDate = `${d.toString().padStart(2, "0")}/${(monthIndex + 1).toString().padStart(2, "0")}/${exportYear}`;
         monthRows.push([
           formattedDate,
           WEEKDAY_LABELS[date.getDay()],
@@ -432,10 +432,10 @@ function DashboardPage() {
 
       monthRows[1][1] = formatMinutes(monthExtra50 * 1.5 + monthExtra100 * 2);
       monthRows[2][1] = formatMinutes(monthExtra50 + monthExtra100);
-      sheets[monthKeyToExport] = monthRows;
+      sheets[monthName] = monthRows;
     }
 
-    downloadWorkbook(`ponto-todos-meses.xlsx`, sheets);
+    downloadWorkbook(`Controle de Ponto - ${exportYear}.xlsx`, sheets);
   }
 
   const fileInputRef = useRef<HTMLInputElement>(null);
