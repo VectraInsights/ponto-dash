@@ -213,30 +213,36 @@ function parseImageRowsFromText(text: string, selectedYear: number, selectedMont
 async function parseImageFile(file: File, selectedYear: number, selectedMonth: number): Promise<ImportedRow[]> {
   const { createWorker } = (await import("tesseract.js")) as any;
   const worker = createWorker({ logger: () => null });
-  await worker.load();
 
-  let language = "por";
   try {
-    await worker.loadLanguage(language);
-    await worker.initialize(language);
+    await worker.load();
+
+    let language = "por";
+    try {
+      await worker.loadLanguage(language);
+      await worker.initialize(language);
+    } catch (err) {
+      console.warn("Portuguese language failed, falling back to English", err);
+      language = "eng";
+      await worker.loadLanguage(language);
+      await worker.initialize(language);
+    }
+
+    await worker.setParameters({
+      tessedit_pageseg_mode: "6",
+      tessedit_char_whitelist: "0123456789:./-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+      user_defined_dpi: "300",
+    });
+
+    const dataUrl = await preprocessImageForOcr(file);
+    const { data } = await worker.recognize(dataUrl);
+    return parseImageRowsFromText(data.text || "", selectedYear, selectedMonth);
   } catch (err) {
-    console.warn("Portuguese language failed, falling back to English", err);
-    language = "eng";
-    await worker.loadLanguage(language);
-    await worker.initialize(language);
+    console.error("Erro ao processar imagem OCR:", err);
+    throw err;
+  } finally {
+    await worker.terminate().catch(() => null);
   }
-
-  await worker.setParameters({
-    tessedit_pageseg_mode: "6",
-    tessedit_char_whitelist: "0123456789:./-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-    user_defined_dpi: "300",
-  });
-
-  const dataUrl = await preprocessImageForOcr(file);
-  const { data } = await worker.recognize(dataUrl);
-  await worker.terminate();
-
-  return parseImageRowsFromText(data.text || "", selectedYear, selectedMonth);
 }
 
 function DashboardPage() {
@@ -332,13 +338,26 @@ function DashboardPage() {
   }
 
   function exportXlsx() {
-    const totalExtra = totals.extra50 + totals.extra100;
+    const totalActualExtra = totals.extra50 + totals.extra100;
     const rows: (string | number)[][] = [
-      ["Total Horas Extras", formatMinutes(totalExtra)],
+      ["Relatório de ponto", ""],
+      ["Mês", `${MONTH_LABELS[month]}/${year}`],
+      [],
+      ["Total horas extras pagas (ponderadas)", formatMinutes(totals.extraTotalWeighted)],
+      ["Total horas extras reais", formatMinutes(totalActualExtra)],
       [],
       ["Data", "Dia", "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", "Trabalhado", "Extra", "Adicional", "Feriado"],
     ];
+
     for (const day of days) {
+      const hasValue =
+        day.entry.entrada1 ||
+        day.entry.saida1 ||
+        day.entry.entrada2 ||
+        day.entry.saida2 ||
+        day.entry.isHoliday;
+      if (!hasValue) continue;
+
       const dateParts = day.key.split("-");
       const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
       rows.push([
@@ -378,13 +397,25 @@ function DashboardPage() {
         let rows: ImportedRow[] = [];
 
         if (isImage) {
-          rows = await parseImageFile(file, year, month);
-          if (rows.length === 0) {
-            toast.error(`Não foi possível extrair dados de ${file.name}.`, { id: "file-import" });
+          try {
+            rows = await parseImageFile(file, year, month);
+            if (rows.length === 0) {
+              toast.error(`Não foi possível extrair dados de ${file.name}. Tente outra foto ou outro arquivo.`, { id: "file-import" });
+              continue;
+            }
+          } catch (err) {
+            console.error(`Erro OCR em ${file.name}:`, err);
+            toast.error(`Erro ao processar imagem ${file.name}. Verifique se é um JPEG claro e tente novamente.`, { id: "file-import" });
             continue;
           }
         } else {
-          rows = await parseImportFile(file);
+          try {
+            rows = await parseImportFile(file);
+          } catch (err) {
+            console.error(`Erro ao ler planilha ${file.name}:`, err);
+            toast.error(`Erro ao ler planilha ${file.name}. Verifique o formato XLSX/CSV.`, { id: "file-import" });
+            continue;
+          }
           if (rows.length === 0) {
             toast.error(`Nenhuma linha válida encontrada em ${file.name}.`, { id: "file-import" });
             continue;
@@ -417,7 +448,8 @@ function DashboardPage() {
       toast.success(`${count} lançamento(s) importado(s)`, { id: "file-import" });
     } catch (err) {
       console.error(err);
-      toast.error("Erro ao importar arquivo(s). Tente outro formato.", { id: "file-import" });
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      toast.error(`Erro ao importar arquivo(s). ${errorMessage}`, { id: "file-import" });
     }
   }
 

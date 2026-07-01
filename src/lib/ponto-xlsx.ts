@@ -69,21 +69,48 @@ export function downloadTemplate() {
 export function downloadMonthFile(filename: string, rows: (string | number)[][]) {
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws["!cols"] = [
+    { wch: 18 },
     { wch: 12 },
-    { wch: 8 },
-    { wch: 10 },
-    { wch: 10 },
-    { wch: 10 },
-    { wch: 10 },
     { wch: 12 },
-    { wch: 10 },
-    { wch: 10 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 12 },
     { wch: 10 },
   ];
 
+  const borderStyle = {
+    top: { style: "thin", color: { rgb: "FF000000" } },
+    bottom: { style: "thin", color: { rgb: "FF000000" } },
+    left: { style: "thin", color: { rgb: "FF000000" } },
+    right: { style: "thin", color: { rgb: "FF000000" } },
+  };
+  const headerStyle = {
+    font: { bold: true },
+    fill: { fgColor: { rgb: "FFEFEFEF" } },
+    border: borderStyle,
+    alignment: { horizontal: "center" as const, vertical: "center" as const },
+  };
+  const bodyStyle = {
+    border: borderStyle,
+    alignment: { horizontal: "left" as const, vertical: "center" as const },
+  };
+
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
+  for (let R = range.s.r; R <= range.e.r; ++R) {
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+      const cell = ws[cellAddress];
+      if (!cell || cell.v === undefined || cell.v === "") continue;
+      cell.s = R === 6 ? headerStyle : bodyStyle;
+    }
+  }
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Ponto");
-  XLSX.writeFile(wb, filename);
+  XLSX.writeFile(wb, filename, { bookType: "xlsx", bookSST: false, cellStyles: true });
 }
 
 function normalizeTime(v: unknown): string {
