@@ -428,7 +428,7 @@ function DashboardPage() {
         ]);
       }
 
-      monthRows[0][1] = formatMinutesAsClock(monthExtra50 + monthExtra100);
+      monthRows[0][0] = `Total Horas Extras - ${formatMinutesAsClock(monthExtra50 + monthExtra100)}`;
       sheets[monthName] = monthRows;
     }
 
