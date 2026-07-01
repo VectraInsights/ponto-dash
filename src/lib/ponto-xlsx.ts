@@ -189,7 +189,7 @@ export function downloadWorkbook(filename: string, sheets: Record<string, (strin
         const cell = ws[cellAddress];
         if (!cell || cell.v === undefined || cell.v === "") continue;
 
-        if (R === 0) {
+            if (R === 0) {
           cell.s = summaryStyle;
         } else if (R === 2) {
           cell.s = headerStyle;
@@ -200,6 +200,9 @@ export function downloadWorkbook(filename: string, sheets: Record<string, (strin
         }
       }
     }
+
+    if (!ws["!merges"]) ws["!merges"] = [];
+    ws["!merges"].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } });
 
     const columnWidths = Array(range.e.c - range.s.c + 1).fill(0);
     for (let R = range.s.r; R <= range.e.r; ++R) {
@@ -214,7 +217,7 @@ export function downloadWorkbook(filename: string, sheets: Record<string, (strin
       }
     }
 
-    ws["!cols"] = columnWidths.map((wch) => ({ wch }));
+    ws["!cols"] = columnWidths.map((wch, index) => ({ wch }));
     ws["!rows"] = Array.from({ length: range.e.r + 1 }, () => ({ hpt: 20 }));
 
     XLSX.utils.book_append_sheet(wb, ws, sheetName);

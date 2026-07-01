@@ -396,14 +396,15 @@ function DashboardPage() {
       const monthName = MONTH_LABELS[monthIndex];
       const monthKeyToExport = monthKey(exportYear, monthIndex);
       const daysInThisMonth = daysInMonth(exportYear, monthIndex);
+      let monthExtra50 = 0;
+      let monthExtra100 = 0;
       const monthRows: (string | number)[][] = [
-        ["Total Horas Extras", ""],
+        ["Total Horas Extras - 00:00"],
         [],
         ["Data", "Dia", "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", "Trabalhado", "Extra", "Adicional", "Feriado"],
       ];
 
-      let monthExtra50 = 0;
-      let monthExtra100 = 0;
+      for (let d = 1; d <= daysInThisMonth; d++) {
       for (let d = 1; d <= daysInThisMonth; d++) {
         const date = new Date(exportYear, monthIndex, d);
         const dateKeyValue = dayKey(exportYear, monthIndex, d);
