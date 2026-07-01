@@ -391,6 +391,34 @@ async function parseImageFile(file: File, selectedYear: number, selectedMonth: n
   }
 }
 
+async function extractImageRowsWithFallback(file: File, selectedYear: number, selectedMonth: number): Promise<ImportedRow[]> {
+  // First: try local OCR
+  try {
+    const local = await parseImageFile(file, selectedYear, selectedMonth);
+    if (local && local.length > 0) return local;
+  } catch (err) {
+    console.warn("Local OCR failed, will try server Gemini fallback", err);
+  }
+
+  // Fallback: send to server route which calls Gemini and returns extracted text
+  const form = new FormData();
+  form.append("file", file);
+  form.append("selectedYear", String(selectedYear));
+  form.append("selectedMonth", String(selectedMonth));
+
+  const res = await fetch("/api/extract-image", { method: "POST", body: form });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload?.error || `Server extraction failed (${res.status})`);
+  }
+
+  const payload = await res.json().catch(() => null) as { text?: string } | null;
+  const text = payload?.text ?? "";
+  if (!text) return [];
+
+  return parseImageRowsFromText(text, selectedYear, selectedMonth);
+}
+
 function DashboardPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
@@ -553,14 +581,14 @@ function DashboardPage() {
 
         if (isImage) {
           try {
-            rows = await parseImageFile(file, year, month);
+            rows = await extractImageRowsWithFallback(file, year, month);
             if (rows.length === 0) {
               toast.error(`Não foi possível extrair dados de ${file.name}. Tente outra foto ou outro arquivo.`, { id: "file-import" });
               continue;
             }
           } catch (err) {
-            console.error(`Erro OCR em ${file.name}:`, err);
-            toast.error(`Erro ao processar imagem ${file.name}. Verifique se é um JPEG claro e tente novamente.`, { id: "file-import" });
+            console.error(`Erro OCR/Gemini em ${file.name}:`, err);
+            toast.error(`Erro ao processar imagem ${file.name}. Verifique se é uma imagem clara e tente novamente.`, { id: "file-import" });
             continue;
           }
         } else {
