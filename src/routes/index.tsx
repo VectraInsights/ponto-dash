@@ -793,6 +793,7 @@ function StatCard({
     holiday: "bg-destructive/10 text-destructive",
     success: "bg-[var(--color-success)]/15 text-[var(--color-success)]",
   };
+
   return (
     <div className="rounded-2xl border border-border bg-card p-5 shadow-[var(--shadow-card)]">
       <div className="flex items-center justify-between">
@@ -804,7 +805,9 @@ function StatCard({
         </span>
       </div>
       <p className="mt-3 font-display text-3xl font-semibold text-foreground">{value}</p>
-      {sub && <p className="mt-1 text-xs text-muted-foreground">{sub}</p>}
+      {sub && (
+        <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
+      )}
     </div>
   );
 }
