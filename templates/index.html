@@ -206,7 +206,7 @@
               <a href="{{ url_for('index') }}"><button class="secondary" type="button">Cancelar</button></a>
             {% endif %}
           </div>
-          <p class="note">Se enviar uma foto, o sistema tentará ler os horários automaticamente. O reconhecimento funciona melhor em imagens nítidas.</p>
+          <p class="note">📸 Selecione uma foto do cartão de ponto e o sistema extrairá os horários automaticamente usando IA no navegador (funciona 100% na nuvem, sem instalações extras).</p>
         </form>
       </div>
 
@@ -277,42 +277,61 @@
         </table>
       </div>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
     <script>
-      // Detecta seleção de arquivo e processa OCR automaticamente
       const fileInput = document.querySelector('input[name="image"]');
       if (fileInput) {
         fileInput.addEventListener('change', async function(event) {
           const file = event.target.files[0];
           if (!file) return;
           
-          const formData = new FormData();
-          formData.append('file', file);
+          // Mostra indicador de carregamento
+          const label = fileInput.closest('label');
+          const status = document.createElement('p');
+          status.textContent = '⏳ Processando imagem...';
+          status.style.color = '#94a3b8';
+          status.style.fontSize = '12px';
+          label.appendChild(status);
           
           try {
-            const response = await fetch('/ocr', {
-              method: 'POST',
-              body: formData
-            });
-            
-            if (!response.ok) {
-              alert('Erro ao processar imagem');
-              return;
-            }
-            
-            const data = await response.json();
-            
-            // Preenche os campos com os horários extraídos
-            if (data.entry) document.querySelector('input[name="entry"]').value = data.entry;
-            if (data.lunch_out) document.querySelector('input[name="lunch_out"]').value = data.lunch_out;
-            if (data.lunch_in) document.querySelector('input[name="lunch_in"]').value = data.lunch_in;
-            if (data.exit_time) document.querySelector('input[name="exit_time"]').value = data.exit_time;
-            
-            // Limpa a seleção de arquivo após processar
-            fileInput.value = '';
-            
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+              const { createWorker } = Tesseract;
+              const worker = await createWorker('por');
+              
+              const { data: { text } } = await worker.recognize(e.target.result);
+              await worker.terminate();
+              
+              // Extrai horários (padrão HH:MM)
+              const times = text.match(/\b([0-1][0-9]|2[0-3]):([0-5][0-9])\b/g) || [];
+              
+              // Preenche os campos com os 4 primeiros horários encontrados
+              const fields = ['entry', 'lunch_out', 'lunch_in', 'exit_time'];
+              fields.forEach((field, idx) => {
+                if (times[idx]) {
+                  document.querySelector(`input[name="${field}"]`).value = times[idx];
+                }
+              });
+              
+              // Remove indicador de carregamento
+              status.remove();
+              
+              if (times.length > 0) {
+                status.textContent = `✓ ${times.length} horário(s) extraído(s)`;
+                status.style.color = '#15803d';
+                label.appendChild(status);
+                setTimeout(() => status.remove(), 2000);
+              }
+              
+              // Limpa a seleção de arquivo após processar
+              fileInput.value = '';
+            };
+            reader.readAsDataURL(file);
           } catch (error) {
             console.error('Erro:', error);
-            alert('Erro ao processar imagem: ' + error.message);
+            status.textContent = '❌ Erro ao processar imagem';
+            status.style.color = '#dc2626';
+            setTimeout(() => status.remove(), 3000);
           }
         });
       }
